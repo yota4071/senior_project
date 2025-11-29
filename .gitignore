@@ -52,6 +52,7 @@ runtime/
 data/
 tmp/
 dist/
+!runtime/main.py
 
 # macOS
 .DS_Store
