@@ -1,0 +1,57 @@
+# Python cache & env
+__pycache__/
+*.pyc
+.venv/
+venv/
+project2_env/
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Logs
+*.log
+
+# Audio & Video
+*.wav
+*.mp3
+*.mp4
+captures/
+recordings/
+
+# YOLO / tracking outputs
+runs/
+*.pt
+
+# Whisper / keyword detection
+transcripts/
+events_*.jsonl
+
+# ZKP build artifacts
+*.r1cs
+*.zkey
+*.sym
+*.wtns
+*.wasm
+proof.json
+public.json
+
+# Blockchain build artifacts (Hardhat)
+blockchain_root/cache/
+blockchain_root/artifacts/
+
+# CUDA installers
+cuda-*.deb
+*.pin
+*.pin.*
+
+# General output folders
+output/
+runtime/
+data/
+tmp/
+dist/
+
+# macOS
+.DS_Store
