@@ -1,8 +1,8 @@
 # detectors/yolo_deepsort.py
 from ultralytics import YOLO  
-from deep_sort_realtime.deepsort_tracker import DeepSort  # DeepSORTの実装を使っているならこちらも必要
+from deep_sort_realtime.deepsort_tracker import DeepSort 
 
-CONF_THRESHOLD = 0.8
+CONF_THRESHOLD = 0.7
 
 def extract_person_boxes(results):
     boxes = []
