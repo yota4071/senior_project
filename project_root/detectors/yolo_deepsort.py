@@ -2,7 +2,7 @@
 from ultralytics import YOLO  
 from deep_sort_realtime.deepsort_tracker import DeepSort 
 
-CONF_THRESHOLD = 0.7
+CONF_THRESHOLD = 0.8
 
 def extract_person_boxes(results):
     boxes = []

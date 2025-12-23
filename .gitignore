@@ -48,7 +48,6 @@ cuda-*.deb
 
 # General output folders
 output/
-runtime/
 data/
 tmp/
 dist/
