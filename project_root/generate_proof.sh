@@ -9,7 +9,7 @@
 # ==============================================================
 
 set -euo pipefail
-RPI_NOTIFY_URL="http://192.168.100.151:5000/zkp-stored"
+RPI_NOTIFY_URL="http://192.168.101.9:5000/zkp-stored"
 
 # --- 実行コマンド（必要なら環境変数で上書き可） ---
 PYTHON_EXEC="${PYTHON_EXEC:-python3}"

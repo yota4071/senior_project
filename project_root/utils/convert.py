@@ -2,12 +2,41 @@ import json
 import sys
 from datetime import datetime
 
-# ゾーン名を数値に変換
+# ゾーン名を数値に変換（zone_definitions.py と対応）
+# 横4列×縦3行: A,B,C,D (1段目) / E,F,G,H (2段目) / I,J,K,L (3段目)
+# zone_map = {
+#     # 1段目
+#     "zone_A": 7,
+#     "zone_B": 8,
+#     "zone_C": 11,
+#     "zone_D": 4,
+#     # 2段目
+#     "zone_E": 5,
+#     "zone_F": 6,
+#     "zone_G": 2,
+#     "zone_H": 1,
+#     # 3段目
+#     "zone_I": 9,
+#     "zone_J": 10,
+#     "zone_K": 3,
+#     "zone_L": 12,
+# }
 zone_map = {
+    # 1段目
     "zone_A": 1,
     "zone_B": 2,
     "zone_C": 3,
-    "zone_D": 4
+    "zone_D": 4,
+    # 2段目
+    "zone_E": 5,
+    "zone_F": 6,
+    "zone_G": 7,
+    "zone_H": 8,
+    # 3段目
+    "zone_I": 9,
+    "zone_J": 10,
+    "zone_K": 11,
+    "zone_L": 12,
 }
 
 # ISO形式 → UNIX秒に変換

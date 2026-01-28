@@ -1,0 +1,1024 @@
+\chapter*{付録}
+\addcontentsline{toc}{chapter}{付録}
+
+\section*{付録1: ATMノード（Raspberry Pi）のプログラム}
+\addcontentsline{toc}{section}{付録1: ATMノード（Raspberry Pi）のプログラム}
+
+\begin{lstlisting}[language=Python, caption=ATMノードのプログラム]
+# ここにATMノード（Raspberry Pi）のプログラムを記述してください
+
+\end{lstlisting}
+
+\section*{付録2: 店舗ノード（Jetson）のプログラム}
+\addcontentsline{toc}{section}{付録2: 店舗ノード（Jetson）のプログラム}
+
+\subsection*{2.1 開発環境}
+
+\subsubsection*{ハードウェア}
+\begin{itemize}
+  \item NVIDIA Jetson Orin Nano（Linux 5.15.148-tegra）
+  \item USBカメラ（640x480解像度）
+\end{itemize}
+
+\subsubsection*{ソフトウェア・ライブラリ}
+\begin{itemize}
+  \item Python 3.10
+  \item Node.js v18.x
+  \item Circom 2.0.0（ZK回路コンパイラ）
+  \item snarkjs（Groth16証明生成・検証）
+  \item Hardhat 2.22.3（Ethereumスマートコントラクト開発）
+  \item ethers.js 6.16.0（ブロックチェーン通信）
+  \item OpenCV（画像処理）
+  \item PyTorch + CUDA（GPU推論）
+  \item Ultralytics YOLOv8（物体検出）
+  \item DeepSORT（マルチオブジェクトトラッキング）
+  \item Flask（HTTPサーバ）
+\end{itemize}
+
+\subsubsection*{ブロックチェーン}
+\begin{itemize}
+  \item Ethereum Sepolia テストネット
+  \item Solidity 0.8.28
+\end{itemize}
+
+\subsubsection*{Node.js依存パッケージ（project\_root/package.json）}
+\begin{lstlisting}[language=json, caption=project\_root/package.json]
+{
+  "dependencies": {
+    "circomlib": "^2.0.5"
+  },
+  "name": "project_root",
+  "version": "1.0.0"
+}
+\end{lstlisting}
+
+\subsubsection*{Node.js依存パッケージ（blockchain\_root/package.json）}
+\begin{lstlisting}[language=json, caption=blockchain\_root/package.json]
+{
+  "name": "hardhat-project",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-chai-matchers": "^2.1.0",
+    "@nomicfoundation/hardhat-ethers": "^3.1.3",
+    "@nomicfoundation/hardhat-network-helpers": "^1.1.2",
+    "@nomicfoundation/hardhat-toolbox": "^3.0.0",
+    "@nomicfoundation/hardhat-verify": "^1.1.1",
+    "@typechain/ethers-v6": "^0.4.3",
+    "@typechain/hardhat": "^8.0.3",
+    "chai": "^4.5.0",
+    "ethers": "^6.16.0",
+    "hardhat": "^2.22.3",
+    "hardhat-gas-reporter": "^1.0.10",
+    "solidity-coverage": "^0.8.17",
+    "ts-node": "^10.9.2",
+    "typechain": "^8.3.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.1"
+  },
+  "version": "1.0.0"
+}
+\end{lstlisting}
+
+%==============================================================================
+\subsection*{2.2 ZK回路（Circom）}
+%==============================================================================
+
+\begin{lstlisting}[language=C, caption=circuits/circuit.circom（軌跡検証回路）]
+pragma circom 2.0.0;
+include "circomlib/circuits/comparators.circom";
+
+template TrajectoryCheck() {
+    signal input zones[4];
+    signal input timestamps[4];
+    signal output result;
+
+    var MAX_DURATION = 15;
+    var EXPECTED_ZONES[4] = [1, 2, 3, 4];
+
+    component zoneChecks[4];
+    for (var i = 0; i < 4; i++) {
+        zoneChecks[i] = IsEqual();
+        zoneChecks[i].in[0] <== zones[i];
+        zoneChecks[i].in[1] <== EXPECTED_ZONES[i];
+    }
+
+    component tsChecks[3];
+    for (var i = 0; i < 3; i++) {
+        tsChecks[i] = LessEqThan(64);
+        tsChecks[i].in[0] <== timestamps[i];
+        tsChecks[i].in[1] <== timestamps[i + 1];
+    }
+
+    signal totalTime;
+    totalTime <== timestamps[3] - timestamps[0];
+
+    component timeCheck = LessEqThan(64);
+    timeCheck.in[0] <== totalTime;
+    timeCheck.in[1] <== MAX_DURATION;
+
+    signal all1;
+    signal all2;
+    signal all3;
+    signal all4;
+    signal all5;
+    signal all6;
+    signal all7;
+    signal allPass;
+
+    all1 <== zoneChecks[0].out * zoneChecks[1].out;
+    all2 <== zoneChecks[2].out * zoneChecks[3].out;
+    all3 <== tsChecks[0].out * tsChecks[1].out;
+    all4 <== tsChecks[2].out * timeCheck.out;
+
+    all5 <== all1 * all2;
+    all6 <== all3 * all4;
+    all7 <== all5 * all6;
+
+    allPass <== all7;
+
+    result <== allPass;
+}
+
+component main = TrajectoryCheck();
+\end{lstlisting}
+
+%==============================================================================
+\subsection*{2.3 トラッキングシステム（Python）}
+%==============================================================================
+
+\begin{lstlisting}[language=Python, caption=tracking/zone\_definitions.py（ゾーン定義）]
+# 640x480 を 横4列×縦3行 グリッドに分割
+# 各セル: 160x160 ピクセル (640/4 = 160, 480/3 = 160)
+ZONES = {
+    # 1段目 (y=0-160)
+    "zone_A": ((0,   0),   (160, 160)),
+    "zone_B": ((160, 0),   (320, 160)),
+    "zone_C": ((320, 0),   (480, 160)),
+    "zone_D": ((480, 0),   (640, 160)),
+
+    # 2段目 (y=160-320)
+    "zone_E": ((0,   160), (160, 320)),
+    "zone_F": ((160, 160), (320, 320)),
+    "zone_G": ((320, 160), (480, 320)),
+    "zone_H": ((480, 160), (640, 320)),
+
+    # 3段目 (y=320-480)
+    "zone_I": ((0,   320), (160, 480)),
+    "zone_J": ((160, 320), (320, 480)),
+    "zone_K": ((320, 320), (480, 480)),
+    "zone_L": ((480, 320), (640, 480)),
+}
+
+# ゾーンごとの色設定 (B, G, R)
+ZONE_COLORS = {
+    "zone_A": (255, 255, 0),    # シアン
+    "zone_B": (0, 255, 0),      # 緑
+    "zone_C": (0, 0, 255),      # 赤
+    "zone_D": (128, 128, 128),  # グレー
+    "zone_E": (255, 0, 255),    # マゼンタ
+    "zone_F": (0, 255, 255),    # 黄色
+    "zone_G": (255, 128, 0),    # オレンジ
+    "zone_H": (128, 0, 255),    # 紫
+    "zone_I": (255, 0, 128),    # ピンク
+    "zone_J": (0, 128, 255),    # オレンジ系
+    "zone_K": (128, 255, 0),    # 黄緑
+    "zone_L": (0, 128, 128),    # ダークシアン
+}
+\end{lstlisting}
+
+\begin{lstlisting}[language=Python, caption=tracking/zone\_assigner.py（ゾーン判定）]
+from .zone_definitions import ZONES
+
+def get_zone(x, y):
+    for name, ((x1, y1), (x2, y2)) in ZONES.items():
+        if x1 <= x <= x2 and y1 <= y <= y2:
+            return name
+    return "unknown"
+\end{lstlisting}
+
+\begin{lstlisting}[language=Python, caption=tracking/trajectory\_manager.py（軌跡管理）]
+import json
+import os
+
+# ゾーン履歴（ゾーン＋タイムスタンプ）を記録
+trajectories = {}
+
+# 座標は描画用のみ
+temp_coords = {}
+
+def get_trajectory(track_id):
+    return temp_coords.get(track_id, [])
+
+def save_trajectory(extra_filepath: str | None = None):
+    """
+    常に data/trajectories.json（ZKP用の既存パス）に保存する。
+    extra_filepath が指定されているときは、
+    そのパスにも同じ内容を追加で保存する。
+    """
+    canonical_path = "data/trajectories.json"
+    os.makedirs(os.path.dirname(canonical_path), exist_ok=True)
+    with open(canonical_path, "w") as f:
+        json.dump(trajectories, f, indent=2)
+
+    if extra_filepath is not None:
+        os.makedirs(os.path.dirname(extra_filepath), exist_ok=True)
+        with open(extra_filepath, "w") as f:
+            json.dump(trajectories, f, indent=2)
+
+def update_trajectory(track_id, x, y, zone_name, timestamp):
+    if track_id not in temp_coords:
+        temp_coords[track_id] = []
+    temp_coords[track_id].append((x, y))
+
+    if track_id not in trajectories:
+        trajectories[track_id] = []
+        last_zone = None
+    else:
+        last_zone = trajectories[track_id][-1]["zone"] if trajectories[track_id] else None
+
+    if zone_name != last_zone:
+        trajectories[track_id].append({
+            "zone": zone_name,
+            "timestamp": timestamp
+        })
+\end{lstlisting}
+
+%==============================================================================
+\subsection*{2.4 物体検出・追跡（YOLO + DeepSORT）}
+%==============================================================================
+
+\begin{lstlisting}[language=Python, caption=detectors/yolo\_deepsort.py]
+from ultralytics import YOLO
+from deep_sort_realtime.deepsort_tracker import DeepSort
+
+CONF_THRESHOLD = 0.8
+
+def extract_person_boxes(results):
+    boxes = []
+    for box in results[0].boxes:
+        if int(box.cls[0]) == 0:
+            conf = float(box.conf[0])
+            if conf < CONF_THRESHOLD:
+                continue
+
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            boxes.append(([x1, y1, x2 - x1, y2 - y1], conf, 'person'))
+    return boxes
+
+class YOLODeepSORTTracker:
+    def __init__(self, yolo_model_path):
+        self.model = YOLO(yolo_model_path)
+        self.model.to("cuda")
+        self.tracker = DeepSort()
+
+    def update(self, frame):
+        results = self.model(frame)
+        person_boxes = extract_person_boxes(results)
+        tracks = self.tracker.update_tracks(person_boxes, frame=frame)
+        return tracks
+
+    def active_ids(self):
+        return [track.track_id for track in self.tracker.tracker.tracks if track.is_confirmed()]
+\end{lstlisting}
+
+%==============================================================================
+\subsection*{2.5 メインプログラム（カメラトラッキング）}
+%==============================================================================
+
+\begin{lstlisting}[language=Python, caption=runtime/main.py]
+import cv2
+import time
+import argparse
+from datetime import datetime
+
+from detectors.yolo_deepsort import YOLODeepSORTTracker
+from tracking.trajectory_manager import update_trajectory, get_trajectory, save_trajectory
+
+
+def build_grid_zones(width: int, height: int, cols: int, rows: int):
+    """画面を cols x rows に均等分割したZONESを生成"""
+    cell_w = width // cols
+    cell_h = height // rows
+
+    zones = {}
+    for r in range(rows):
+        for c in range(cols):
+            x1 = c * cell_w
+            y1 = r * cell_h
+            x2 = (c + 1) * cell_w if c < cols - 1 else width
+            y2 = (r + 1) * cell_h if r < rows - 1 else height
+            zones[f"zone_{r}_{c}"] = ((x1, y1), (x2, y2))
+    return zones
+
+
+def get_zone(zones, x, y):
+    """座標(x,y)が属するゾーン名を返す"""
+    for name, ((x1, y1), (x2, y2)) in zones.items():
+        if x1 <= x < x2 and y1 <= y < y2:
+            return name
+    return None
+
+
+def draw_zones(frame, zones, thickness=1):
+    """ゾーン枠と名前を描画"""
+    grid_color = (170, 170, 170)
+    for zone_name, ((x1, y1), (x2, y2)) in zones.items():
+        cv2.rectangle(frame, (x1, y1), (x2, y2), grid_color, thickness)
+        cv2.putText(frame, zone_name, (x1 + 5, y1 + 18),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, grid_color, 1, cv2.LINE_AA)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--camera", type=int, default=0)
+    parser.add_argument("--width", type=int, default=640)
+    parser.add_argument("--height", type=int, default=480)
+    parser.add_argument("--cols", type=int, default=3)
+    parser.add_argument("--rows", type=int, default=4)
+    parser.add_argument("--trial", type=str, default=None)
+    parser.add_argument("--model", type=str, default="models/yolov8n.pt")
+    parser.add_argument("--foot_mode", type=str, default="bottom",
+                        choices=["bottom", "lower20"])
+    parser.add_argument("--show_traj", action="store_true")
+    args = parser.parse_args()
+
+    trial_name = args.trial or datetime.now().strftime("%Y%m%d_%H%M%S")
+    print(f"=== Trial: {trial_name} | Grid: {args.cols}x{args.rows} ===")
+
+    cap = cv2.VideoCapture(args.camera)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+
+    if not cap.isOpened():
+        print("カメラが開けませんでした")
+        return
+
+    ret, frame = cap.read()
+    if not ret:
+        print("初期フレームの取得に失敗しました")
+        return
+
+    H, W = frame.shape[:2]
+    zones = build_grid_zones(W, H, args.cols, args.rows)
+
+    tracker = YOLODeepSORTTracker(args.model)
+
+    start_time = time.time()
+    frame_count = 0
+    fps_min = 9999.0
+
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            draw_zones(frame, zones, thickness=1)
+            tracks = tracker.update(frame)
+
+            for track in tracks:
+                if not track.is_confirmed():
+                    continue
+
+                track_id = track.track_id
+                x1, y1, x2, y2 = map(int, track.to_ltrb())
+
+                foot_x = int((x1 + x2) / 2)
+                if args.foot_mode == "bottom":
+                    foot_y = y2
+                else:
+                    foot_y = int(y2 - 0.2 * (y2 - y1))
+
+                timestamp = datetime.now().isoformat()
+                zone_name = get_zone(zones, foot_x, foot_y)
+
+                update_trajectory(f"person_{track_id}", foot_x, foot_y, zone_name, timestamp)
+
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
+                cv2.circle(frame, (foot_x, foot_y), 4, (255, 0, 0), -1)
+                cv2.putText(frame, f"ID: {track_id}", (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+            if args.show_traj:
+                for tid in tracker.active_ids():
+                    traj = get_trajectory(f"person_{tid}")
+                    for i in range(1, len(traj)):
+                        cv2.line(frame, traj[i - 1], traj[i], (255, 0, 255), 2)
+
+            frame_count += 1
+            elapsed = time.time() - start_time
+            fps = frame_count / max(elapsed, 1e-6)
+            fps_min = min(fps_min, fps)
+            cv2.putText(frame, f"FPS(avg): {fps:.2f}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+            cv2.imshow("YOLO + DeepSORT Tracking", frame)
+
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                break
+
+    except KeyboardInterrupt:
+        print("Ctrl+C で終了しました")
+
+    finally:
+        cap.release()
+        save_trajectory(filename=f"data/trajectories_{trial_name}.json")
+        cv2.destroyAllWindows()
+        print(f"Saved: data/trajectories_{trial_name}.json")
+        print(f"FPS avg: {fps:.2f} | FPS min: {fps_min:.2f}")
+
+
+if __name__ == "__main__":
+    main()
+\end{lstlisting}
+
+%==============================================================================
+\subsection*{2.6 データ変換（軌跡→Circom入力）}
+%==============================================================================
+
+\begin{lstlisting}[language=Python, caption=utils/convert.py]
+import json
+import sys
+from datetime import datetime
+
+# ゾーン名を数値に変換
+zone_map = {
+    # 1段目
+    "zone_A": 1,
+    "zone_B": 2,
+    "zone_C": 3,
+    "zone_D": 4,
+    # 2段目
+    "zone_E": 5,
+    "zone_F": 6,
+    "zone_G": 7,
+    "zone_H": 8,
+    # 3段目
+    "zone_I": 9,
+    "zone_J": 10,
+    "zone_K": 11,
+    "zone_L": 12,
+}
+
+# ISO形式 -> UNIX秒に変換
+def iso_to_unix(timestamp_str):
+    return int(datetime.fromisoformat(timestamp_str).timestamp())
+
+# 最新の zone_D 到達者の軌跡を抽出して input.json に変換
+def extract_latest_zone_d(file_path, output_path):
+    with open(file_path, 'r') as f:
+        all_data = json.load(f)
+
+    latest_person = None
+    latest_d_time = None
+
+    for person_id, records in all_data.items():
+        for idx, entry in enumerate(records):
+            if entry["zone"] == "zone_D":
+                ts = datetime.fromisoformat(entry["timestamp"])
+                if latest_d_time is None or ts > latest_d_time:
+                    latest_d_time = ts
+                    latest_person = (person_id, records[:idx + 1])
+
+    if latest_person is None:
+        print("[!] zone_D に到達した人物がいませんでした。")
+        return
+
+    person_id, trajectory = latest_person
+    zones = [zone_map[pt["zone"]] for pt in trajectory]
+    timestamps = [iso_to_unix(pt["timestamp"]) for pt in trajectory]
+
+    output = {
+        "zones": zones,
+        "timestamps": timestamps
+    }
+
+    with open(output_path, 'w') as f:
+        json.dump(output, f, indent=2)
+
+    print(f"[OK] {person_id} のデータを Circom 用に変換しました -> {output_path}")
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print("Usage: convert.py <input_json> <output_json>")
+        sys.exit(1)
+
+    input_json = sys.argv[1]
+    output_json = sys.argv[2]
+
+    extract_latest_zone_d(input_json, output_json)
+\end{lstlisting}
+
+%==============================================================================
+\subsection*{2.7 Witness生成（JavaScript）}
+%==============================================================================
+
+\begin{lstlisting}[language=JavaScript, caption=circuits/circuit\_js/generate\_witness.js]
+const wc  = require("./witness_calculator.js");
+const { readFileSync, writeFile } = require("fs");
+
+if (process.argv.length != 5) {
+    console.log("Usage: node generate_witness.js <file.wasm> <input.json> <output.wtns>");
+} else {
+    const input = JSON.parse(readFileSync(process.argv[3], "utf8"));
+
+    const buffer = readFileSync(process.argv[2]);
+    wc(buffer).then(async witnessCalculator => {
+        const buff = await witnessCalculator.calculateWTNSBin(input, 0);
+        writeFile(process.argv[4], buff, function(err) {
+            if (err) throw err;
+        });
+    });
+}
+\end{lstlisting}
+
+%==============================================================================
+\subsection*{2.8 ZKP生成パイプライン（シェルスクリプト）}
+%==============================================================================
+
+\begin{lstlisting}[language=bash, caption=generate\_proof.sh]
+#!/bin/bash
+# ==============================================================
+#  ZK Pipeline (preprocess + witness + prove + verify)
+# ==============================================================
+
+set -euo pipefail
+RPI_NOTIFY_URL="http://192.168.101.9:5000/zkp-stored"
+
+# --- 実行コマンド ---
+PYTHON_EXEC="${PYTHON_EXEC:-python3}"
+NODE_EXEC="${NODE_EXEC:-$(command -v node || echo /usr/local/bin/node)}"
+SNARKJS_EXEC="${SNARKJS_EXEC:-$(command -v snarkjs || echo /usr/local/bin/snarkjs)}"
+
+# --- プロジェクトルート ---
+BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# --- ディレクトリ・ファイル ---
+CIRCUITS_DIR="$BASE_DIR/circuits"
+DATA_DIR="$BASE_DIR/data"
+UTILS_DIR="$BASE_DIR/utils"
+
+CIRCUIT_NAME="${CIRCUIT_NAME:-circuit}"
+
+# 入出力
+TRAJECTORIES_JSON="${TRAJECTORIES_JSON:-$DATA_DIR/trajectories.json}"
+INPUT_JSON="${INPUT_JSON:-$CIRCUITS_DIR/input.json}"
+WITNESS_WTNS="$BASE_DIR/output/witness.wtns"
+PROOF_JSON="$BASE_DIR/output/proof.json"
+PUBLIC_JSON="$BASE_DIR/output/public.json"
+
+# circom 生成物
+WASM_PATH="${WASM_PATH:-$CIRCUITS_DIR/${CIRCUIT_NAME}_js/${CIRCUIT_NAME}.wasm}"
+GEN_WITNESS_JS="${GEN_WITNESS_JS:-$CIRCUITS_DIR/${CIRCUIT_NAME}_js/generate_witness.js}"
+ZKEY_PATH="${ZKEY_PATH:-$CIRCUITS_DIR/${CIRCUIT_NAME}_final.zkey}"
+VK_PATH="${VK_PATH:-$CIRCUITS_DIR/verification_key.json}"
+
+CONVERT_PY="${CONVERT_PY:-$UTILS_DIR/convert.py}"
+
+OUTPUT_DIR="$BASE_DIR/output"
+mkdir -p "$OUTPUT_DIR"
+
+echo "=============================================================="
+echo " Zero-Knowledge Proof Pipeline"
+echo "=============================================================="
+
+# --- 依存コマンドチェック ---
+command -v "$PYTHON_EXEC" >/dev/null 2>&1 || { echo "error: $PYTHON_EXEC が見つかりません"; exit 1; }
+[ -x "$NODE_EXEC" ] || { echo "error: node が見つかりません"; exit 1; }
+[ -x "$SNARKJS_EXEC" ] || { echo "error: snarkjs が見つかりません"; exit 1; }
+
+# --- 必須ファイルチェック ---
+[ -f "$TRAJECTORIES_JSON" ] || { echo "error: $TRAJECTORIES_JSON がありません"; exit 1; }
+[ -f "$CONVERT_PY" ] || { echo "error: $CONVERT_PY がありません"; exit 1; }
+[ -f "$WASM_PATH" ] || { echo "error: $WASM_PATH がありません"; exit 1; }
+[ -f "$GEN_WITNESS_JS" ] || { echo "error: $GEN_WITNESS_JS がありません"; exit 1; }
+[ -f "$ZKEY_PATH" ] || { echo "error: $ZKEY_PATH がありません"; exit 1; }
+[ -f "$VK_PATH" ] || { echo "error: $VK_PATH がありません"; exit 1; }
+
+# [前処理] trajectories.json -> input.json
+echo "[前処理] $TRAJECTORIES_JSON -> $INPUT_JSON を生成..."
+"$PYTHON_EXEC" "$CONVERT_PY" "$TRAJECTORIES_JSON" "$INPUT_JSON"
+
+# [1] Witness の計算
+echo "[ステップ 1/3] Witness を計算中..."
+"$NODE_EXEC" "$GEN_WITNESS_JS" "$WASM_PATH" "$INPUT_JSON" "$WITNESS_WTNS"
+
+# [2] Proof の生成
+echo "[ステップ 2/3] Proof を生成中..."
+"$SNARKJS_EXEC" groth16 prove "$ZKEY_PATH" "$WITNESS_WTNS" "$PROOF_JSON" "$PUBLIC_JSON"
+
+# [3] 検証
+echo "[ステップ 3/3] 生成した Proof を検証中..."
+VERIFY_OUT="$("$SNARKJS_EXEC" groth16 verify "$VK_PATH" "$PUBLIC_JSON" "$PROOF_JSON" || true)"
+if [[ "$VERIFY_OUT" == *"OK"* ]]; then
+  echo "検証に成功しました！"
+else
+  echo "検証に失敗しました。"
+  echo "$VERIFY_OUT"
+  exit 1
+fi
+
+echo "全てのプロセスが正常に完了しました。"
+
+# =======================
+# ブロックチェーン連携
+# =======================
+RUN_CHAIN="${RUN_CHAIN:-1}"
+BLOCKCHAIN_DIR="${BLOCKCHAIN_DIR:-$BASE_DIR/../blockchain_root}"
+
+if [[ "$RUN_CHAIN" == "1" ]]; then
+  echo "ブロックチェーン連携を実行します..."
+
+  [ -d "$BLOCKCHAIN_DIR" ] || { echo "error: blockchain_root が見つかりません"; exit 1; }
+
+  mkdir -p "$BLOCKCHAIN_DIR/proof"
+  cp "$PROOF_JSON"  "$BLOCKCHAIN_DIR/proof/proof.json"
+  cp "$PUBLIC_JSON" "$BLOCKCHAIN_DIR/proof/public.json"
+
+  if [ -x "$BLOCKCHAIN_DIR/StoreAndVerify.sh" ]; then
+    pushd "$BLOCKCHAIN_DIR" >/dev/null
+    ./StoreAndVerify.sh
+    popd >/dev/null
+    echo "ブロックチェーン側の検証＋保存まで完了しました"
+  fi
+fi
+
+# --- HTTP(Webhook) 通知 ---
+EVENT_JSON='{"event": "zkp_stored", "timestamp": "'"$(date -Is)"'"}'
+
+if [[ -n "${RPI_NOTIFY_URL:-}" ]]; then
+  echo "ラズパイへ HTTP 通知: $RPI_NOTIFY_URL"
+  curl -sS -X POST "$RPI_NOTIFY_URL" \
+    -H 'Content-Type: application/json' \
+    -d "$EVENT_JSON" || echo "HTTP通知に失敗しました"
+fi
+\end{lstlisting}
+
+%==============================================================================
+\subsection*{2.9 スマートコントラクト（Solidity）}
+%==============================================================================
+
+\begin{lstlisting}[language=Solidity, caption=contracts/Verifier.sol（Groth16検証コントラクト）]
+// SPDX-License-Identifier: GPL-3.0
+pragma solidity >=0.7.0 <0.9.0;
+
+contract Groth16Verifier {
+    // Scalar field size
+    uint256 constant r = 21888242871839275222246405745257275088548364400416034343698204186575808495617;
+    // Base field size
+    uint256 constant q = 21888242871839275222246405745257275088696311157297823662689037894645226208583;
+
+    // Verification Key data
+    uint256 constant alphax = 20491192805390485299153009773594534940189261866228447918068658471970481763042;
+    uint256 constant alphay = 9383485363053290200918347156157836566562967994039712273449902621266178545958;
+    uint256 constant betax1 = 4252822878758300859123897981450591353533073413197771768651442665752259397132;
+    uint256 constant betax2 = 6375614351688725206403948262868962793625744043794305715222011528459656738731;
+    uint256 constant betay1 = 21847035105528745403288232691147584728191162732299865338377159692350059136679;
+    uint256 constant betay2 = 10505242626370262277552901082094356697409835680220590971873171140371331206856;
+    uint256 constant gammax1 = 11559732032986387107991004021392285783925812861821192530917403151452391805634;
+    uint256 constant gammax2 = 10857046999023057135944570762232829481370756359578518086990519993285655852781;
+    uint256 constant gammay1 = 4082367875863433681332203403145435568316851327593401208105741076214120093531;
+    uint256 constant gammay2 = 8495653923123431417604973247489272438418190587263600148770280649306958101930;
+    uint256 constant deltax1 = 2263397671767056286221887566256319682169787836886194803533788119416677936226;
+    uint256 constant deltax2 = 4246651844915815373630795255234623463537658050783473939235453788256760825446;
+    uint256 constant deltay1 = 494182514580644992626377724493218725935212809218998442440704025136732564752;
+    uint256 constant deltay2 = 5651219803589856862797856707670733934183624624433905687405214668122259936915;
+
+    uint256 constant IC0x = 2727670057803473048354643319762904847867319821993807729518486185744946288351;
+    uint256 constant IC0y = 8930886798563919431690935525434869581893047636074101377527165946415727264319;
+    uint256 constant IC1x = 9420041431406619851470766177137173535219815147825583567234218496145543717785;
+    uint256 constant IC1y = 16543940149804679353570736123148571985482696626789387222901483636640998498683;
+
+    uint16 constant pVk = 0;
+    uint16 constant pPairing = 128;
+    uint16 constant pLastMem = 896;
+
+    function verifyProof(
+        uint[2] calldata _pA,
+        uint[2][2] calldata _pB,
+        uint[2] calldata _pC,
+        uint[1] calldata _pubSignals
+    ) public view returns (bool) {
+        assembly {
+            function checkField(v) {
+                if iszero(lt(v, r)) {
+                    mstore(0, 0)
+                    return(0, 0x20)
+                }
+            }
+
+            function g1_mulAccC(pR, x, y, s) {
+                let success
+                let mIn := mload(0x40)
+                mstore(mIn, x)
+                mstore(add(mIn, 32), y)
+                mstore(add(mIn, 64), s)
+
+                success := staticcall(sub(gas(), 2000), 7, mIn, 96, mIn, 64)
+                if iszero(success) {
+                    mstore(0, 0)
+                    return(0, 0x20)
+                }
+
+                mstore(add(mIn, 64), mload(pR))
+                mstore(add(mIn, 96), mload(add(pR, 32)))
+
+                success := staticcall(sub(gas(), 2000), 6, mIn, 128, pR, 64)
+                if iszero(success) {
+                    mstore(0, 0)
+                    return(0, 0x20)
+                }
+            }
+
+            function checkPairing(pA, pB, pC, pubSignals, pMem) -> isOk {
+                let _pPairing := add(pMem, pPairing)
+                let _pVk := add(pMem, pVk)
+
+                mstore(_pVk, IC0x)
+                mstore(add(_pVk, 32), IC0y)
+
+                g1_mulAccC(_pVk, IC1x, IC1y, calldataload(add(pubSignals, 0)))
+
+                mstore(_pPairing, calldataload(pA))
+                mstore(add(_pPairing, 32), mod(sub(q, calldataload(add(pA, 32))), q))
+
+                mstore(add(_pPairing, 64), calldataload(pB))
+                mstore(add(_pPairing, 96), calldataload(add(pB, 32)))
+                mstore(add(_pPairing, 128), calldataload(add(pB, 64)))
+                mstore(add(_pPairing, 160), calldataload(add(pB, 96)))
+
+                mstore(add(_pPairing, 192), alphax)
+                mstore(add(_pPairing, 224), alphay)
+
+                mstore(add(_pPairing, 256), betax1)
+                mstore(add(_pPairing, 288), betax2)
+                mstore(add(_pPairing, 320), betay1)
+                mstore(add(_pPairing, 352), betay2)
+
+                mstore(add(_pPairing, 384), mload(add(pMem, pVk)))
+                mstore(add(_pPairing, 416), mload(add(pMem, add(pVk, 32))))
+
+                mstore(add(_pPairing, 448), gammax1)
+                mstore(add(_pPairing, 480), gammax2)
+                mstore(add(_pPairing, 512), gammay1)
+                mstore(add(_pPairing, 544), gammay2)
+
+                mstore(add(_pPairing, 576), calldataload(pC))
+                mstore(add(_pPairing, 608), calldataload(add(pC, 32)))
+
+                mstore(add(_pPairing, 640), deltax1)
+                mstore(add(_pPairing, 672), deltax2)
+                mstore(add(_pPairing, 704), deltay1)
+                mstore(add(_pPairing, 736), deltay2)
+
+                let success := staticcall(sub(gas(), 2000), 8, _pPairing, 768, _pPairing, 0x20)
+                isOk := and(success, mload(_pPairing))
+            }
+
+            let pMem := mload(0x40)
+            mstore(0x40, add(pMem, pLastMem))
+
+            checkField(calldataload(add(_pubSignals, 0)))
+
+            let isValid := checkPairing(_pA, _pB, _pC, _pubSignals, pMem)
+
+            mstore(0, isValid)
+            return(0, 0x20)
+        }
+    }
+}
+\end{lstlisting}
+
+\begin{lstlisting}[language=Solidity, caption=contracts/ATMVerifier.sol（ZKP保存コントラクト）]
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import "./Verifier.sol";
+
+contract ZKPStorage {
+    Groth16Verifier public verifier;
+
+    constructor(address _verifier) {
+        verifier = Groth16Verifier(_verifier);
+    }
+
+    struct Proof {
+        uint[2] a;
+        uint[2][2] b;
+        uint[2] c;
+        uint[1] input;
+        bool verified;
+    }
+
+    mapping(address => Proof) private proofs;
+
+    event ProofStored(address indexed user, bool verified);
+
+    function verifyAndStoreProof(
+        uint[2] memory a,
+        uint[2][2] memory b,
+        uint[2] memory c,
+        uint inputValue
+    ) public returns (bool) {
+        uint[1] memory input = [inputValue];
+
+        bool isValid = verifier.verifyProof(a, b, c, input);
+
+        proofs[msg.sender] = Proof(a, b, c, input, isValid);
+
+        emit ProofStored(msg.sender, isValid);
+        return isValid;
+    }
+
+    function getMyProof() public view returns (
+        uint[2] memory a,
+        uint[2][2] memory b,
+        uint[2] memory c,
+        uint[1] memory input,
+        bool verified
+    ) {
+        Proof memory p = proofs[msg.sender];
+        return (p.a, p.b, p.c, p.input, p.verified);
+    }
+}
+\end{lstlisting}
+
+%==============================================================================
+\subsection*{2.10 ブロックチェーン操作スクリプト}
+%==============================================================================
+
+\begin{lstlisting}[language=JavaScript, caption=scripts/deploy.js（コントラクトデプロイ）]
+// scripts/deploy.js
+async function main() {
+  const Verifier = await ethers.getContractFactory("Groth16Verifier");
+  const verifier = await Verifier.deploy();
+  await verifier.waitForDeployment();
+
+  console.log("Verifier deployed to:", await verifier.getAddress());
+
+  const ZKPStorage = await ethers.getContractFactory("ZKPStorage");
+  const zkpStorage = await ZKPStorage.deploy(await verifier.getAddress());
+  await zkpStorage.waitForDeployment();
+
+  console.log("ZKPStorage deployed to:", await zkpStorage.getAddress());
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+\end{lstlisting}
+
+\begin{lstlisting}[language=JavaScript, caption=scripts/storeAndVerify.js（証明の検証・保存）]
+const hre = require("hardhat");
+const fs = require("fs");
+
+async function main() {
+  const zkpStorageAddress = "0xb4f4e63DF760209E0a4B470088B5268C2843B7e0";
+
+  const [signer] = await hre.ethers.getSigners();
+  console.log("Using signer:", await signer.getAddress());
+
+  const ZKPStorage = await hre.ethers.getContractFactory("ZKPStorage", signer);
+  const zkpStorage = await ZKPStorage.attach(zkpStorageAddress);
+
+  const proof = JSON.parse(fs.readFileSync("./proof/proof.json"));
+  const pub = JSON.parse(fs.readFileSync("./proof/public.json"));
+
+  const a = [
+    BigInt(proof.pi_a[0]),
+    BigInt(proof.pi_a[1])
+  ];
+
+  const b = [
+    [BigInt(proof.pi_b[0][1]), BigInt(proof.pi_b[0][0])],
+    [BigInt(proof.pi_b[1][1]), BigInt(proof.pi_b[1][0])]
+  ];
+
+  const c = [
+    BigInt(proof.pi_c[0]),
+    BigInt(proof.pi_c[1])
+  ];
+
+  const inputValue = BigInt(pub[0]);
+
+  console.log("Verifying and storing proof...");
+
+  const start = Date.now();
+
+  const tx = await zkpStorage.verifyAndStoreProof(a, b, c, inputValue);
+  const receipt = await tx.wait();
+
+  const end = Date.now();
+  const duration = end - start;
+
+  console.log(`Verification and storage took ${duration} ms`);
+  console.log("TX Hash:", receipt.transactionHash);
+
+  const storedProof = await zkpStorage.getMyProof();
+  console.log("Stored input:", storedProof.input.map(v => v.toString()));
+  console.log("Verified:", storedProof.verified);
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+\end{lstlisting}
+
+\begin{lstlisting}[language=bash, caption=StoreAndVerify.sh（ブロックチェーン保存ラッパー）]
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BLOCKCHAIN_DIR="$SCRIPT_DIR"
+PROJECT_ROOT="${PROJECT_ROOT:-$SCRIPT_DIR/../project_root}"
+
+echo "=============================================================="
+echo " Blockchain Store & Verify"
+echo "=============================================================="
+
+PROOF_FILE="$BLOCKCHAIN_DIR/proof/proof.json"
+PUBLIC_FILE="$BLOCKCHAIN_DIR/proof/public.json"
+
+if [ ! -f "$PROOF_FILE" ] || [ ! -f "$PUBLIC_FILE" ]; then
+  echo "エラー: proof.json または public.json が見つかりません"
+  exit 1
+fi
+
+echo "ブロックチェーン上で検証＋保存中..."
+cd "$BLOCKCHAIN_DIR"
+npx hardhat run scripts/storeAndVerify.js --network sepolia
+
+echo "ブロックチェーンへの保存が完了しました"
+\end{lstlisting}
+
+%==============================================================================
+\subsection*{2.11 Hardhat設定}
+%==============================================================================
+
+\begin{lstlisting}[language=JavaScript, caption=hardhat.config.js]
+require("dotenv").config();
+require("@nomicfoundation/hardhat-toolbox");
+
+/** @type import('hardhat/config').HardhatUserConfig */
+module.exports = {
+  solidity: "0.8.28",
+  networks: {
+    sepolia: {
+      url: process.env.SEPOLIA_RPC_URL,
+      accounts: [process.env.PRIVATE_KEY]
+    }
+  }
+};
+\end{lstlisting}
+
+%==============================================================================
+\subsection*{2.12 Flaskサーバ（ATMからの通知受信）}
+%==============================================================================
+
+\begin{lstlisting}[language=Python, caption=flask\_server/server.py]
+from flask import Flask, request, jsonify
+import subprocess
+import os
+
+app = Flask(__name__)
+
+@app.route('/alert', methods=['POST'])
+def handle_alert():
+    data = request.json
+    print("ATMからの通知を受信:", data)
+
+    try:
+        current_script_path = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.abspath(os.path.join(current_script_path, '..'))
+        shell_script_path = os.path.join(project_root, 'generate_proof.sh')
+
+        print(f"実行するスクリプトの絶対パス: {shell_script_path}")
+        result = subprocess.run(
+            ["bash", shell_script_path],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+        print("ZKP生成成功:\n", result.stdout)
+        return jsonify({"status": "zkp_success"}), 200
+
+    except subprocess.CalledProcessError as e:
+        print("ZKP生成失敗:")
+        print("   STDOUT:", e.stdout)
+        print("   STDERR:", e.stderr)
+        return jsonify({"status": "zkp_failed", "error": e.stderr}), 500
+    except FileNotFoundError:
+        print(f"シェルスクリプトが見つかりません: {shell_script_path}")
+        return jsonify({"status": "script_not_found"}), 500
+    except Exception as e:
+        print(f"予期せぬエラーが発生しました: {e}")
+        return jsonify({"status": "unknown_error", "message": str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
+\end{lstlisting}
